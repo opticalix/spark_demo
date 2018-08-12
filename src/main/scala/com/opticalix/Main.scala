@@ -1,7 +1,7 @@
 package com.opticalix
 
 import com.github.nscala_time.time.Imports._
-import org.apache.spark.{SparkConf, SparkContext}
+import org.apache.spark.{HashPartitioner, SparkConf, SparkContext}
 import org.apache.spark.storage.StorageLevel
 import org.joda.time.format.DateTimeFormat
 
@@ -15,7 +15,8 @@ object Main {
     val conf = new SparkConf().setAppName(appName).setMaster(master)
     val sc = new SparkContext(conf)
 
-    arrayTest(sc)
+//    arrayTest(sc)
+    pageRank(sc)
     sc.stop()
   }
 
@@ -31,5 +32,38 @@ object Main {
     val result = midResult.reduce((x, y) => x + y)
     val accSum = acc.sum
     println(s"acc=$accSum, result=$result")
+  }
+
+  def pageRank(sc: SparkContext): Unit = {
+    //Define alpha
+    val alpha = 0.85
+    val iterCnt = 20
+    //Init relation graph of pages
+    val links = sc.parallelize(
+      List(
+        ("A", List("A", "C", "D")),
+        ("B", List("D")),
+        ("C", List("B", "D")),
+        ("D", List()))
+    )
+      //Take advantage of partitions and save in mem cache
+      .partitionBy(new HashPartitioner(2))
+      .persist()
+    //Init pageRanks
+    var ranks = links.mapValues(_ => 1.0)
+
+    //Iteration
+    for (i <- 0 until iterCnt) {
+      val contributions = links.join(ranks).flatMap{
+        case (_, (linkList, rank)) =>
+          linkList.map(dest => (dest, rank / linkList.size))
+      }
+      ranks = contributions.reduceByKey((x, y) => x + y)
+        .mapValues(v => {
+          (1 - alpha) + alpha * v
+        })
+    }
+    //Display final pageRanks
+    ranks.sortByKey().foreach(println)
   }
 }
