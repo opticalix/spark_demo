@@ -55,10 +55,20 @@ object Main {
     var ranks = links.mapValues(_ => 1.0)
 
     //Iteration
+    val tupleFunc = (_: String, linkRank:(List[String], Double)) => {
+      val linkList = linkRank._1
+      val rank = linkRank._2
+      linkList.map(dest => (dest, rank / linkList.size))
+    }
     for (i <- 0 until iterCnt) {
-      val contributions = links.join(ranks).flatMap{
+      val contributions = links.join(ranks)
+        //1. use tupleFunc
+//        .flatMap(tupleFunc)
+        //2. use partialFunc
+        .flatMap{
         case (_, (linkList, rank)) =>
-          linkList.map(dest => (dest, rank / linkList.size))
+          val tuples = linkList.map(dest => (dest, rank / linkList.size))
+          tuples
       }
       ranks = contributions.reduceByKey((x, y) => x + y)
         .mapValues(v => {
@@ -67,6 +77,25 @@ object Main {
     }
     //Display final pageRanks
     ranks.sortByKey().foreach(println)
+  }
+
+  def defaultPartitioner(sc : SparkContext) = {
+    val links = sc.parallelize(
+      List(
+        ("A", List("A", "C", "D")),
+        ("B", List("D")),
+        ("C", List("B", "D")),
+        ("D", List()))
+    ).persist()
+    var partitioner = links.partitioner
+    if (partitioner.isDefined) {
+      println("Before sort" + partitioner.get)//print nothing
+    }
+    val sortLinks = links.sortByKey()
+    partitioner = sortLinks.partitioner
+    if (partitioner.isDefined) {
+      println("After sort" + partitioner.get)//will use rangePartitioner as default
+    }
   }
 
   def main(args: Array[String]): Unit = {
@@ -80,7 +109,9 @@ object Main {
 
 //    hadoopLogAnalysis(sc, args)
 //    arrayTest(sc)
-    pageRank(sc)
+//    pageRank(sc)
+    defaultPartitioner(sc)
+
     sc.stop()
   }
 }
