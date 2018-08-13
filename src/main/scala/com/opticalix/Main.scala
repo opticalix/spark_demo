@@ -6,18 +6,20 @@ import org.apache.spark.storage.StorageLevel
 import org.joda.time.format.DateTimeFormat
 
 object Main {
-  def main(args: Array[String]): Unit = {
-    val time = new DateTime
-    val fmt = DateTimeFormat.forPattern("yyyyMMdd hh:mm:ss")
 
-    val appName = "spark-demo-" + time.toString(fmt)
-    val master = "local"
-    val conf = new SparkConf().setAppName(appName).setMaster(master)
-    val sc = new SparkContext(conf)
+  def hadoopLogAnalysis(sc: SparkContext, args: Array[String]) = {
+    var hadoopLogFile = ""
+    if (args != null && args.length > 0
+      && (args(0).startsWith("file://") || args(0).startsWith("hdfs://"))) {
+      hadoopLogFile = args(0)
+    }
+    println(s"hadoopLogFile=$hadoopLogFile")
 
-//    arrayTest(sc)
-    pageRank(sc)
-    sc.stop()
+    val error = sc.textFile(hadoopLogFile).filter(_.contains("ERROR")).cache()
+    val errCnt = error.count()
+    val mysqlErrCnt = error.filter(_.contains("MySQL")).count()
+    val hdfsMsg = error.filter(_.contains("HDFS")).map(_.split("\t")(3)).collect()
+    println(s"errCnt=$errCnt, mysqlErrCnt=$mysqlErrCnt, hdfsMsg=$hdfsMsg")
   }
 
   def arrayTest(sc: SparkContext): Unit = {
@@ -65,5 +67,20 @@ object Main {
     }
     //Display final pageRanks
     ranks.sortByKey().foreach(println)
+  }
+
+  def main(args: Array[String]): Unit = {
+    val time = new DateTime
+    val fmt = DateTimeFormat.forPattern("yyyyMMdd hh:mm:ss")
+
+    val appName = "spark-demo-" + time.toString(fmt)
+    val master = "local"
+    val conf = new SparkConf().setAppName(appName).setMaster(master)
+    val sc = new SparkContext(conf)
+
+//    hadoopLogAnalysis(sc, args)
+//    arrayTest(sc)
+    pageRank(sc)
+    sc.stop()
   }
 }
