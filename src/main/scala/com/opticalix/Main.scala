@@ -98,6 +98,31 @@ object Main {
     }
   }
 
+  def intTransformPerElement(x: Int): Int = {
+    x * 2
+  }
+
+  def intTransformPerPartition(iter: Iterator[Int]): Iterator[Int] = {
+    for (elem <- iter) yield elem * 2
+  }
+
+  def partitionOp(sc: SparkContext) = {
+    val list = sc.parallelize(1 to 10, 3)
+    val acc1 = sc.longAccumulator("mapAcc")
+    val acc2 = sc.longAccumulator("mapPartitionAcc")
+    list.map(x => {
+      acc1.add(1)
+      intTransformPerElement(x)
+    }).collect().foreach(println)
+
+    list.mapPartitions(iter => {
+      acc2.add(1)
+      intTransformPerPartition(iter)
+    }).collect().foreach(println)
+    //acc not eq. partitionOperation will take less times
+    println("acc1=%d, acc2=%d".format(acc1.value.intValue(), acc2.value.intValue()))
+  }
+
   def main(args: Array[String]): Unit = {
     val time = new DateTime
     val fmt = DateTimeFormat.forPattern("yyyyMMdd hh:mm:ss")
@@ -110,8 +135,8 @@ object Main {
 //    hadoopLogAnalysis(sc, args)
 //    arrayTest(sc)
 //    pageRank(sc)
-    defaultPartitioner(sc)
-
+//    defaultPartitioner(sc)
+    partitionOp(sc)
     sc.stop()
   }
 }
