@@ -1,116 +1,67 @@
 package com.opticalix
 
+import java.io.File
+
 import com.github.nscala_time.time.Imports._
-import org.apache.spark.{HashPartitioner, SparkConf, SparkContext}
+import org.apache.spark.sql.{Row, SparkSession}
+import org.apache.spark.{HashPartitioner, SparkConf, SparkContext, sql}
 import org.apache.spark.storage.StorageLevel
 import org.joda.time.format.DateTimeFormat
+import org.apache.spark.sql._
+import org.apache.spark.sql.types._
 
 object Main {
 
-  def hadoopLogAnalysis(sc: SparkContext, args: Array[String]) = {
-    var hadoopLogFile = ""
-    if (args != null && args.length > 0
-      && (args(0).startsWith("file://") || args(0).startsWith("hdfs://"))) {
-      hadoopLogFile = args(0)
+  /**
+    * call withColumn(), change data type of column
+    * @param df
+    * @param names
+    * @param newType
+    * @return dataFrame
+    */
+  def changeColumnsType(df: DataFrame, names: Array[String], newType: DataType) = {
+    var ret: DataFrame = df
+    for (name <- names) {
+      ret = ret.withColumn(name, df(name).cast(newType))
     }
-    println(s"hadoopLogFile=$hadoopLogFile")
-
-    val error = sc.textFile(hadoopLogFile).filter(_.contains("ERROR")).cache()
-    val errCnt = error.count()
-    val mysqlErrCnt = error.filter(_.contains("MySQL")).count()
-    val hdfsMsg = error.filter(_.contains("HDFS")).map(_.split("\t")(3)).collect()
-    println(s"errCnt=$errCnt, mysqlErrCnt=$mysqlErrCnt, hdfsMsg=$hdfsMsg")
+    ret
   }
 
-  def arrayTest(sc: SparkContext): Unit = {
-    val intArr = Array[Int](1, 2, 3, 4, 5)
-    //Accumulators in Spark are used specifically to provide a mechanism for safely updating a variable when execution is split up across worker nodes in a cluster
-    val acc = sc.longAccumulator
-    val midResult = sc.parallelize(intArr)
-      .map(x => x + 1)
-      .persist(StorageLevel.MEMORY_ONLY)
+  def californiaHouse(spark: SparkSession) = {
+    val sc = spark.sparkContext
+    val sqlc = spark.sqlContext
+    import sqlc.implicits._
+    val calDataPath = "res/cal_housing.data"
+    val calDataDomain = "res/cal_housing.domain"
 
-    midResult.foreach(x => acc.add(x))
-    val result = midResult.reduce((x, y) => x + y)
-    val accSum = acc.sum
-    println(s"acc=$accSum, result=$result")
-  }
+    //read
+    val dataRdd = sc.textFile(calDataPath)
+    val domainRdd = sc.textFile(calDataDomain)
+    domainRdd.collect().foreach(println)
+    dataRdd.take(1).foreach(println)
 
-  def pageRank(sc: SparkContext): Unit = {
-    //Define alpha
-    val alpha = 0.85
-    val iterCnt = 20
-    //Init relation graph of pages
-    val links = sc.parallelize(
-      List(
-        ("A", List("A", "C", "D")),
-        ("B", List("D")),
-        ("C", List("B", "D")),
-        ("D", List()))
-    )
-      //Take advantage of partitions and save in mem cache
-      .partitionBy(new HashPartitioner(2))
-      .persist()
-    //Init pageRanks
-    var ranks = links.mapValues(_ => 1.0)
+    //build dataFrame
+    val rowRdd = dataRdd.map(l => l.split(",")).map(arr => Row.fromSeq(arr))
+    val colNames = domainRdd.map(desc => desc.substring(0, desc.indexOf(":"))).map(name => StructField(name, StringType, true)).collect()
+    val dfSchema = StructType(colNames)
+    val df = changeColumnsType(spark.createDataFrame(rowRdd, dfSchema), Array("households", "housingMedianAge", "latitude", "longitude", "medianHouseValue", "medianIncome", "population", "totalBedRooms", "totalRooms"), DoubleType)
+    df.printSchema()
 
-    //Iteration
-    val tupleFunc = (_: String, linkRank:(List[String], Double)) => {
-      val linkList = linkRank._1
-      val rank = linkRank._2
-      linkList.map(dest => (dest, rank / linkList.size))
-    }
-    for (i <- 0 until iterCnt) {
-      val contributions = links.join(ranks)
-        //1. use tupleFunc
-//        .flatMap(tupleFunc)
-        //2. use partialFunc
-        .flatMap{
-        case (_, (linkList, rank)) =>
-          val tuples = linkList.map(dest => (dest, rank / linkList.size))
-          tuples
-      }
-      ranks = contributions.reduceByKey((x, y) => x + y)
-        .mapValues(v => {
-          (1 - alpha) + alpha * v
-        })
-    }
-    //Display final pageRanks
-    ranks.sortByKey().foreach(println)
-  }
-
-  def defaultPartitioner(sc : SparkContext) = {
-    val links = sc.parallelize(
-      List(
-        ("A", List("A", "C", "D")),
-        ("B", List("D")),
-        ("C", List("B", "D")),
-        ("D", List()))
-    ).persist()
-    var partitioner = links.partitioner
-    if (partitioner.isDefined) {
-      println("Before sort" + partitioner.get)//print nothing
-    }
-    val sortLinks = links.sortByKey()
-    partitioner = sortLinks.partitioner
-    if (partitioner.isDefined) {
-      println("After sort" + partitioner.get)//will use rangePartitioner as default
-    }
+    //analysis
+    df.groupBy("housingMedianAge").count().orderBy(df("housingMedianAge").asc).show()
   }
 
   def main(args: Array[String]): Unit = {
-    val time = new DateTime
-    val fmt = DateTimeFormat.forPattern("yyyyMMdd hh:mm:ss")
-
-    val appName = "spark-demo-" + time.toString(fmt)
+    val appName = "California House"
     val master = "local"
-    val conf = new SparkConf().setAppName(appName).setMaster(master)
-    val sc = new SparkContext(conf)
+    val conf = new SparkConf().setAppName(appName).setMaster(master).set("spark.executor.memory", "512mb")
+    val spark = new SparkSession.Builder()
+      .config(conf)
+      .getOrCreate()
+    val sc = spark.sparkContext
+    val sqlc = spark.sqlContext
 
-//    hadoopLogAnalysis(sc, args)
-//    arrayTest(sc)
-//    pageRank(sc)
-    defaultPartitioner(sc)
+    californiaHouse(spark)
 
     sc.stop()
   }
